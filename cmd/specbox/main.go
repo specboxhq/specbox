@@ -28,8 +28,9 @@ func main() {
 	case "integrate":
 		runIntegrate()
 	case "login":
-		fmt.Fprintln(os.Stderr, "specbox login: not yet implemented")
-		os.Exit(1)
+		runLogin()
+	case "whoami":
+		runWhoami()
 	case "update":
 		fmt.Fprintln(os.Stderr, "specbox update: not yet implemented")
 		os.Exit(1)
@@ -59,6 +60,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  init        Initialize specbox in current project")
 	fmt.Fprintln(os.Stderr, "  integrate   Detect AI tools and configure MCP")
 	fmt.Fprintln(os.Stderr, "  login       Authenticate with specbox.io")
+	fmt.Fprintln(os.Stderr, "  whoami      Show current logged-in user")
 	fmt.Fprintln(os.Stderr, "  update      Self-update from GitHub releases")
 	fmt.Fprintln(os.Stderr, "  push        Push a spec to specbox.io")
 	fmt.Fprintln(os.Stderr, "  pull        Pull responses from specbox.io")

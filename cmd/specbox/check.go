@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/specboxhq/specbox/internal/domain"
 	"github.com/specboxhq/specbox/internal/storage"
@@ -55,31 +54,3 @@ func runCheck() {
 
 // resolveDocsDir determines the specs directory.
 // Resolution order: SPECBOX_DIR env → .specbox.yaml → ~/.specbox/config.yaml → "." (project root).
-func resolveDocsDir() string {
-	// 1. Env var
-	if dir := os.Getenv("SPECBOX_DIR"); dir != "" {
-		return dir
-	}
-
-	// 2. Project config
-	root, err := findGitRoot()
-	if err != nil {
-		root, _ = os.Getwd()
-	}
-	projectValues := readSimpleYAML(filepath.Join(root, ".specbox.yaml"))
-	if dir := projectValues["specs_dir"]; dir != "" {
-		return dir
-	}
-
-	// 3. Global config
-	home, err := os.UserHomeDir()
-	if err == nil {
-		globalValues := readSimpleYAML(filepath.Join(home, ".specbox", "config.yaml"))
-		if dir := globalValues["specs_dir"]; dir != "" {
-			return dir
-		}
-	}
-
-	// 4. Default to project root
-	return "."
-}

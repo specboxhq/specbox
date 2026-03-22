@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 func runInit() {
@@ -24,16 +22,20 @@ func runInit() {
 	}
 
 	// Read global config if it exists, or create it
-	globalValues := map[string]string{}
+	var globalCfg *GlobalConfig
 	if _, err := os.Stat(globalConfig); os.IsNotExist(err) {
-		defaultConfig := "# Specbox global configuration\napi_url: https://api.specbox.io\n# Uncomment to set a default specs folder\n# specs_dir: specs\n"
-		if err := os.WriteFile(globalConfig, []byte(defaultConfig), 0644); err != nil {
+		globalCfg = &GlobalConfig{}
+		if err := writeGlobalConfig(globalCfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: cannot write %s: %v\n", globalConfig, err)
 			os.Exit(1)
 		}
 		fmt.Printf("Created %s\n", globalConfig)
 	} else {
-		globalValues = readSimpleYAML(globalConfig)
+		globalCfg, err = readGlobalConfig()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot read %s: %v\n", globalConfig, err)
+			os.Exit(1)
+		}
 		fmt.Printf("Read %s\n", globalConfig)
 	}
 
@@ -45,7 +47,7 @@ func runInit() {
 	}
 
 	// Determine specs_dir: use global config value if set, otherwise default commented out
-	specsDir := globalValues["specs_dir"]
+	specsDir := globalCfg.SpecsDir
 
 	// Create .specbox.yaml if it doesn't exist
 	projectConfig := filepath.Join(projectRoot, ".specbox.yaml")
@@ -68,44 +70,3 @@ func runInit() {
 	fmt.Println("Done! Run 'specbox integrate' to configure your AI tools.")
 }
 
-// readSimpleYAML reads a flat key: value YAML file, skipping comments and blank lines.
-func readSimpleYAML(path string) map[string]string {
-	values := map[string]string{}
-	f, err := os.Open(path)
-	if err != nil {
-		return values
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, val, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		values[strings.TrimSpace(key)] = strings.TrimSpace(val)
-	}
-	return values
-}
-
-// findGitRoot walks up the directory tree to find the .git directory.
-func findGitRoot() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("not a git repository")
-		}
-		dir = parent
-	}
-}
