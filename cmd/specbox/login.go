@@ -28,13 +28,13 @@ type deviceTokenResponse struct {
 
 type meResponse struct {
 	User struct {
-		PublicID    string `json:"public_id"`
+		ID          string `json:"id"`
 		Email       string `json:"email"`
 		Username    string `json:"username"`
 		DisplayName string `json:"display_name"`
 	} `json:"user"`
 	Account struct {
-		PublicID  string `json:"public_id"`
+		ID        string `json:"id"`
 		Namespace string `json:"namespace"`
 	} `json:"account"`
 }
@@ -202,15 +202,6 @@ func verifyToken(apiURL, token string) (*meResponse, error) {
 	}
 
 	return &me, nil
-}
-
-func saveCredentials(serverURL, token string) error {
-	cfg, err := readGlobalConfig()
-	if err != nil {
-		return err
-	}
-	cfg.setServerCredentials(serverURL, token)
-	return writeGlobalConfig(cfg)
 }
 
 func openBrowser(url string) {

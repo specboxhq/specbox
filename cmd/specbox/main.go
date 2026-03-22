@@ -37,11 +37,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "specbox update: not yet implemented")
 		os.Exit(1)
 	case "push":
-		fmt.Fprintln(os.Stderr, "specbox push: not yet implemented")
-		os.Exit(1)
+		runPush()
 	case "pull":
-		fmt.Fprintln(os.Stderr, "specbox pull: not yet implemented")
-		os.Exit(1)
+		runPull()
+	case "set":
+		runSet()
 	case "check":
 		runCheck()
 	case "help", "--help", "-h":
@@ -67,6 +67,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  update      Self-update from GitHub releases")
 	fmt.Fprintln(os.Stderr, "  push        Push a spec to specbox.io")
 	fmt.Fprintln(os.Stderr, "  pull        Pull responses from specbox.io")
+	fmt.Fprintln(os.Stderr, "  set         Set spec metadata without pushing content")
 	fmt.Fprintln(os.Stderr, "  check       Check sync status and validate spec")
 }
 

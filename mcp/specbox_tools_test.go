@@ -249,7 +249,8 @@ func TestCheckSpec(t *testing.T) {
 	}
 }
 
-func TestPushSpecStub(t *testing.T) {
+func TestPushSpecRequiresAuth(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // ensure no auth config found
 	s, store := setupTestServer(t)
 	seedDoc(t, store, "spec.md", "# Spec\n")
 
@@ -257,28 +258,36 @@ func TestPushSpecStub(t *testing.T) {
 		"path": "spec.md",
 	})
 
-	var resp map[string]any
-	if err := json.Unmarshal([]byte(result), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if resp["status"] != "not_implemented" {
-		t.Errorf("expected not_implemented, got %v", resp["status"])
+	if !strings.Contains(result, "not logged in") {
+		t.Errorf("expected auth error, got: %s", result)
 	}
 }
 
-func TestPullSpecStub(t *testing.T) {
+func TestPullSpecRequiresAuth(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	s, store := setupTestServer(t)
-	seedDoc(t, store, "spec.md", "# Spec\n")
+	seedDoc(t, store, "spec.md", "---\nspecbox:\n  id: aBcDeFgHiJkL\n  version: 1\n---\n# Spec\n")
 
 	result := callTool(t, s, "pull_spec", map[string]any{
 		"path": "spec.md",
 	})
 
-	var resp map[string]any
-	if err := json.Unmarshal([]byte(result), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if !strings.Contains(result, "not logged in") {
+		t.Errorf("expected auth error, got: %s", result)
 	}
-	if resp["status"] != "not_implemented" {
-		t.Errorf("expected not_implemented, got %v", resp["status"])
+}
+
+func TestPullSpecRequiresSpecID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, store := setupTestServer(t)
+	seedDoc(t, store, "spec.md", "# Spec with no frontmatter\n")
+
+	// Auth check comes first, so without login we get auth error.
+	result := callTool(t, s, "pull_spec", map[string]any{
+		"path": "spec.md",
+	})
+
+	if !strings.Contains(result, "not logged in") {
+		t.Errorf("expected auth error, got: %s", result)
 	}
 }

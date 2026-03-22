@@ -2,11 +2,15 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/specboxhq/specbox/internal/api"
+	"github.com/specboxhq/specbox/internal/config"
 	"github.com/specboxhq/specbox/internal/domain"
 )
 
@@ -86,19 +90,20 @@ func registerSpecboxTools(s *server.MCPServer, svc domain.DocumentService) {
 		checkSpecHandler(svc),
 	)
 
-	// push_spec (stub)
+	// push_spec
 	s.AddTool(
 		mcp.NewTool("push_spec",
-			mcp.WithDescription("Push a spec to specbox.io (coming soon)."),
+			mcp.WithDescription("Push a spec to specbox.io. Sends content and optional metadata, returns updated frontmatter. Requires specbox login."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
+			mcp.WithObject("metadata", mcp.Description("Optional metadata fields to set (status, priority, tags, visibility, locked, due_date, owner)")),
 		),
 		pushSpecHandler(svc),
 	)
 
-	// pull_spec (stub)
+	// pull_spec
 	s.AddTool(
 		mcp.NewTool("pull_spec",
-			mcp.WithDescription("Pull a spec from specbox.io (coming soon)."),
+			mcp.WithDescription("Pull a spec from specbox.io. Fetches updated frontmatter and responses. Requires specbox login."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
 		),
 		pullSpecHandler(svc),
@@ -638,22 +643,210 @@ func checkSpecHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 	}
 }
 
-// pushSpecHandler is a stub for push_spec.
+// newAPIClient creates an API client using resolved config.
+// The MCP server resolves config the same way the CLI does — env vars, .specbox.yaml, ~/.specbox/config.yaml.
+var newAPIClient = func() (*api.Client, error) {
+	serverURL := config.ResolveServerURL()
+	token := config.ResolveAuthToken(serverURL)
+	if token == "" {
+		return nil, fmt.Errorf("not logged in — run 'specbox login' first")
+	}
+	return &api.Client{APIURL: serverURL + "/api", Token: token}, nil
+}
+
 func pushSpecHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return jsonResult(map[string]any{
-			"status":  "not_implemented",
-			"message": "push_spec requires specbox.io — coming soon",
-		})
+		path, err := request.RequireString("path")
+		if err != nil {
+			return mcp.NewToolResultError("path is required"), nil
+		}
+
+		client, err := newAPIClient()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		doc, err := svc.GetDocument(path)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		// Parse optional metadata
+		var metadata map[string]any
+		if m := request.GetString("metadata", ""); m != "" {
+			// metadata comes as JSON string from MCP
+			_ = json.Unmarshal([]byte(m), &metadata)
+		}
+
+		// Derive slug from path
+		slug := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+
+		result, statusCode, err := client.Push(doc.Content, slug, metadata)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("push failed: %v", err)), nil
+		}
+
+		switch statusCode {
+		case 200:
+			spec := result.Spec
+			if spec == nil {
+				return mcp.NewToolResultError("unexpected empty response"), nil
+			}
+
+			if spec.Merged {
+				// Clean merge — replace both frontmatter and content
+				newContent := spec.Frontmatter + "\n" + spec.RawContent
+				if _, err := svc.SaveDocument(path, newContent); err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("failed to save: %v", err)), nil
+				}
+			} else {
+				// Normal push — replace frontmatter only
+				newContent := api.ReplaceFrontmatter(doc.Content, spec.Frontmatter)
+				if _, err := svc.SaveDocument(path, newContent); err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("failed to save: %v", err)), nil
+				}
+			}
+
+			response := map[string]any{
+				"status":    "pushed",
+				"id":        spec.ID,
+				"version":   spec.Version,
+				"url":       spec.URL,
+				"merged":    spec.Merged,
+				"questions": spec.Questions,
+			}
+			if len(result.Errors) > 0 {
+				response["warnings"] = result.Errors
+			}
+			return jsonResult(response)
+
+		case 409:
+			spec := result.Spec
+			if spec == nil {
+				return mcp.NewToolResultError("merge conflict but no content returned"), nil
+			}
+
+			// Write merged content with conflict markers
+			if strings.HasPrefix(doc.Content, "---\n") {
+				rest := doc.Content[4:]
+				idx := strings.Index(rest, "\n---\n")
+				if idx >= 0 {
+					frontmatter := doc.Content[:4+idx+5]
+					newContent := frontmatter + spec.MergedContent
+					_, _ = svc.SaveDocument(path, newContent)
+				}
+			}
+
+			return jsonResult(map[string]any{
+				"status":         "conflict",
+				"message":        "Merge conflicts detected. Resolve the <<<<<<< local / ======= / >>>>>>> server markers and push again.",
+				"merged_content": spec.MergedContent,
+			})
+
+		case 413:
+			return mcp.NewToolResultError("spec is too large (max 1MB)"), nil
+
+		case 422:
+			return jsonResult(map[string]any{
+				"status": "markup_error",
+				"errors": result.Errors,
+			})
+
+		case 423:
+			return mcp.NewToolResultError("spec is locked — use set_spec_metadata for metadata-only changes"), nil
+
+		case 403:
+			msg := "forbidden"
+			if len(result.Errors) > 0 {
+				msg = result.Errors[0].Message
+			}
+			return mcp.NewToolResultError(msg), nil
+
+		default:
+			msg := fmt.Sprintf("server returned %d", statusCode)
+			if len(result.Errors) > 0 {
+				msg += ": " + result.Errors[0].Message
+			}
+			return mcp.NewToolResultError(msg), nil
+		}
 	}
 }
 
-// pullSpecHandler is a stub for pull_spec.
 func pullSpecHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return jsonResult(map[string]any{
-			"status":  "not_implemented",
-			"message": "pull_spec requires specbox.io — coming soon",
-		})
+		path, err := request.RequireString("path")
+		if err != nil {
+			return mcp.NewToolResultError("path is required"), nil
+		}
+
+		client, err := newAPIClient()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		doc, err := svc.GetDocument(path)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		specID := api.ExtractSpecID(doc.Content)
+		if specID == "" {
+			return mcp.NewToolResultError("spec has not been pushed yet (no specbox.id in frontmatter)"), nil
+		}
+
+		hash := api.ContentHash(doc.Content)
+
+		result, statusCode, err := client.Pull(specID, hash)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("pull failed: %v", err)), nil
+		}
+
+		switch statusCode {
+		case 200:
+			spec := result.Spec
+			if spec == nil {
+				return mcp.NewToolResultError("unexpected empty response"), nil
+			}
+
+			if spec.RawContent != "" {
+				// Behind — replace frontmatter + content
+				newContent := spec.Frontmatter + "\n" + spec.RawContent
+				if _, err := svc.SaveDocument(path, newContent); err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("failed to save: %v", err)), nil
+				}
+				return jsonResult(map[string]any{
+					"status":    "updated",
+					"version":   spec.Version,
+					"questions": spec.Questions,
+				})
+			} else {
+				// Current — replace frontmatter only
+				newContent := api.ReplaceFrontmatter(doc.Content, spec.Frontmatter)
+				if _, err := svc.SaveDocument(path, newContent); err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("failed to save: %v", err)), nil
+				}
+				return jsonResult(map[string]any{
+					"status":    "up_to_date",
+					"version":   spec.Version,
+					"questions": spec.Questions,
+				})
+			}
+
+		case 404:
+			return mcp.NewToolResultError("spec not found on server"), nil
+
+		case 412:
+			return jsonResult(map[string]any{
+				"status":  "local_changes",
+				"message": "Local content has changed. Push first to sync your changes.",
+			})
+
+		default:
+			msg := fmt.Sprintf("server returned %d", statusCode)
+			if len(result.Errors) > 0 {
+				msg += ": " + result.Errors[0].Message
+			}
+			return mcp.NewToolResultError(msg), nil
+		}
 	}
 }

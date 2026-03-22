@@ -103,7 +103,7 @@ func TestSetServerCredentials(t *testing.T) {
 	cfg := &GlobalConfig{}
 
 	// Add new server
-	cfg.setServerCredentials("http://localhost:4000", "token1")
+	cfg.SetServerCredentials("http://localhost:4000", "token1")
 	if len(cfg.Servers) != 1 {
 		t.Fatalf("expected 1 server, got %d", len(cfg.Servers))
 	}
@@ -112,7 +112,7 @@ func TestSetServerCredentials(t *testing.T) {
 	}
 
 	// Update existing server
-	cfg.setServerCredentials("http://localhost:4000", "token2")
+	cfg.SetServerCredentials("http://localhost:4000", "token2")
 	if len(cfg.Servers) != 1 {
 		t.Fatalf("expected 1 server after update, got %d", len(cfg.Servers))
 	}
@@ -121,7 +121,7 @@ func TestSetServerCredentials(t *testing.T) {
 	}
 
 	// Add second server
-	cfg.setServerCredentials("https://specbox.io", "token3")
+	cfg.SetServerCredentials("https://specbox.io", "token3")
 	if len(cfg.Servers) != 2 {
 		t.Fatalf("expected 2 servers, got %d", len(cfg.Servers))
 	}
@@ -130,8 +130,8 @@ func TestSetServerCredentials(t *testing.T) {
 func TestSetServerCredentialsNormalizesTrailingSlash(t *testing.T) {
 	cfg := &GlobalConfig{}
 
-	cfg.setServerCredentials("http://localhost:4000/", "token1")
-	cfg.setServerCredentials("http://localhost:4000", "token2")
+	cfg.SetServerCredentials("http://localhost:4000/", "token1")
+	cfg.SetServerCredentials("http://localhost:4000", "token2")
 
 	if len(cfg.Servers) != 1 {
 		t.Fatalf("expected 1 server (trailing slash normalized), got %d", len(cfg.Servers))
@@ -149,17 +149,17 @@ func TestGetServerConfig(t *testing.T) {
 		},
 	}
 
-	sc := cfg.getServerConfig("http://localhost:4000")
+	sc := cfg.GetServerConfig("http://localhost:4000")
 	if sc == nil || sc.AuthToken != "local-token" {
 		t.Errorf("expected local-token, got %v", sc)
 	}
 
-	sc = cfg.getServerConfig("https://specbox.io")
+	sc = cfg.GetServerConfig("https://specbox.io")
 	if sc == nil || sc.AuthToken != "prod-token" {
 		t.Errorf("expected prod-token, got %v", sc)
 	}
 
-	sc = cfg.getServerConfig("https://unknown.com")
+	sc = cfg.GetServerConfig("https://unknown.com")
 	if sc != nil {
 		t.Errorf("expected nil for unknown server, got %v", sc)
 	}
@@ -172,7 +172,7 @@ func TestGetServerConfigNormalizesTrailingSlash(t *testing.T) {
 		},
 	}
 
-	sc := cfg.getServerConfig("http://localhost:4000/")
+	sc := cfg.GetServerConfig("http://localhost:4000/")
 	if sc == nil {
 		t.Error("expected to find server with trailing slash lookup")
 	}
