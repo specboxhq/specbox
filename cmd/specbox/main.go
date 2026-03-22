@@ -27,6 +27,8 @@ func main() {
 		runInit()
 	case "integrate":
 		runIntegrate()
+	case "config":
+		runConfig()
 	case "login":
 		runLogin()
 	case "whoami":
@@ -59,6 +61,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  version     Print version")
 	fmt.Fprintln(os.Stderr, "  init        Initialize specbox in current project")
 	fmt.Fprintln(os.Stderr, "  integrate   Detect AI tools and configure MCP")
+	fmt.Fprintln(os.Stderr, "  config      Show resolved config and sources")
 	fmt.Fprintln(os.Stderr, "  login       Authenticate with specbox.io")
 	fmt.Fprintln(os.Stderr, "  whoami      Show current logged-in user")
 	fmt.Fprintln(os.Stderr, "  update      Self-update from GitHub releases")

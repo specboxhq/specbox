@@ -158,58 +158,83 @@ func findGitRoot() (string, error) {
 	}
 }
 
-// findProjectConfig walks up from cwd looking for .specbox.yaml and returns
-// the value for the given key, or "" if not found.
-func findProjectConfig(key string) string {
+// configEntry holds a resolved value and where it came from.
+type configEntry struct {
+	Value  string
+	Source string // e.g. "env SPECBOX_DIR", "/home/doug/projects/.specbox.yaml", "~/.specbox/config.yaml", "default"
+}
+
+// findProjectConfigs walks up from cwd collecting all .specbox.yaml files found,
+// ordered from closest (highest priority) to furthest (lowest priority).
+func findProjectConfigs() []string {
+	var configs []string
 	dir, err := os.Getwd()
 	if err != nil {
-		return ""
+		return configs
 	}
 	for {
 		configPath := filepath.Join(dir, ".specbox.yaml")
 		if _, err := os.Stat(configPath); err == nil {
-			if v := readSimpleYAML(configPath)[key]; v != "" {
-				return v
-			}
-			return ""
+			configs = append(configs, configPath)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			break
 		}
 		dir = parent
 	}
+	return configs
 }
 
-// resolveConfig looks up a config key using the standard resolution order:
-// env var (if provided) → nearest .specbox.yaml (walk up from cwd) → global ~/.specbox/config.yaml → defaultVal.
-// Note: for server_url and auth_token, use resolveServerURL() and resolveAuthToken() instead.
-func resolveConfig(key, envVar, defaultVal string) string {
-	// 1. Environment variable
-	if envVar != "" {
-		if v := os.Getenv(envVar); v != "" {
+// findProjectConfig looks up a key across all .specbox.yaml files walking up from cwd.
+// Closest file wins (shadowing). Returns the value or "".
+func findProjectConfig(key string) string {
+	for _, configPath := range findProjectConfigs() {
+		if v := readSimpleYAML(configPath)[key]; v != "" {
 			return v
 		}
 	}
+	return ""
+}
 
-	// 2. Walk up from cwd looking for .specbox.yaml
-	if v := findProjectConfig(key); v != "" {
-		return v
+// resolveConfigWithSource looks up a config key and returns both the value and its source.
+func resolveConfigWithSource(key, envVar, defaultVal string) configEntry {
+	// 1. Environment variable
+	if envVar != "" {
+		if v := os.Getenv(envVar); v != "" {
+			return configEntry{Value: v, Source: "env " + envVar}
+		}
+	}
+
+	// 2. Walk up from cwd — shadowed merge, closest wins
+	for _, configPath := range findProjectConfigs() {
+		if v := readSimpleYAML(configPath)[key]; v != "" {
+			return configEntry{Value: v, Source: configPath}
+		}
 	}
 
 	// 3. Global config (flat fields only — specs_dir)
 	cfg, err := readGlobalConfig()
 	if err == nil {
+		home, _ := os.UserHomeDir()
+		globalPath := filepath.Join(home, ".specbox", "config.yaml")
 		switch key {
 		case "specs_dir":
 			if cfg.SpecsDir != "" {
-				return cfg.SpecsDir
+				return configEntry{Value: cfg.SpecsDir, Source: globalPath}
 			}
 		}
 	}
 
 	// 4. Default
-	return defaultVal
+	return configEntry{Value: defaultVal, Source: "default"}
+}
+
+// resolveConfig looks up a config key using the standard resolution order:
+// env var (if provided) → .specbox.yaml files (walk up from cwd, closest wins) → global ~/.specbox/config.yaml → defaultVal.
+// Note: for server_url and auth_token, use resolveServerURL() and resolveAuthToken() instead.
+func resolveConfig(key, envVar, defaultVal string) string {
+	return resolveConfigWithSource(key, envVar, defaultVal).Value
 }
 
 // resolveDocsDir returns the specs directory.
@@ -219,21 +244,50 @@ func resolveDocsDir() string {
 
 // resolveServerURL returns the server URL from env var, project config, or default.
 func resolveServerURL() string {
-	// 1. Env var
-	if u := os.Getenv("SPECBOX_SERVER_URL"); u != "" {
-		return strings.TrimRight(u, "/")
-	}
-
-	// 2. Project config
-	if u := findProjectConfig("server_url"); u != "" {
-		return strings.TrimRight(u, "/")
-	}
-
-	// 3. Default
-	return "https://specbox.io"
+	entry := resolveConfigWithSource("server_url", "SPECBOX_SERVER_URL", "https://specbox.io")
+	return strings.TrimRight(entry.Value, "/")
 }
 
 // resolveAPIURL returns the API base URL (e.g. "https://specbox.io/api").
 func resolveAPIURL() string {
 	return resolveServerURL() + "/api"
+}
+
+// allResolvedConfig returns all known config keys with their resolved values and sources.
+// Used by the `specbox config` command.
+func allResolvedConfig() []struct {
+	Key   string
+	Entry configEntry
+} {
+	return []struct {
+		Key   string
+		Entry configEntry
+	}{
+		{"specs_dir", resolveConfigWithSource("specs_dir", "SPECBOX_DIR", ".")},
+		{"server_url", configEntry{Value: resolveServerURL(), Source: resolveConfigWithSource("server_url", "SPECBOX_SERVER_URL", "https://specbox.io").Source}},
+	}
+}
+
+// allProjectConfigValues returns all key-value pairs from all .specbox.yaml files
+// walking up from cwd, with source paths. Used by `specbox config` to show shadowed values.
+func allProjectConfigValues() []struct {
+	Key    string
+	Value  string
+	Source string
+} {
+	var entries []struct {
+		Key    string
+		Value  string
+		Source string
+	}
+	for _, configPath := range findProjectConfigs() {
+		for k, v := range readSimpleYAML(configPath) {
+			entries = append(entries, struct {
+				Key    string
+				Value  string
+				Source string
+			}{k, v, configPath})
+		}
+	}
+	return entries
 }
