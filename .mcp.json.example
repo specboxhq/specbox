@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "specbox": {
+      "command": "specbox",
+      "args": ["mcp"],
+      "env": {
+        "SPECBOX_DIR": "./specs"
+      }
+    }
+  }
+}
