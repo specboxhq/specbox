@@ -239,13 +239,23 @@ func runSet() {
 			os.Exit(1)
 		}
 		key, value := parts[0], parts[1]
-		switch value {
-		case "true":
+		switch {
+		case value == "true":
 			metadata[key] = true
-		case "false":
+		case value == "false":
 			metadata[key] = false
-		case "null", "nil", "":
+		case value == "null" || value == "nil" || value == "":
 			metadata[key] = nil
+		case strings.Contains(value, ","):
+			// Comma-separated values → array (e.g. tags=v1,api)
+			items := strings.Split(value, ",")
+			trimmed := make([]string, 0, len(items))
+			for _, item := range items {
+				if s := strings.TrimSpace(item); s != "" {
+					trimmed = append(trimmed, s)
+				}
+			}
+			metadata[key] = trimmed
 		default:
 			metadata[key] = value
 		}
