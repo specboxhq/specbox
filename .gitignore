@@ -1,2 +1,6 @@
 # Binary
 specbox
+*.exe
+
+# GoReleaser
+dist/
