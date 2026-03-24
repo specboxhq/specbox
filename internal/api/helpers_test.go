@@ -47,6 +47,15 @@ func TestContentHash(t *testing.T) {
 	}
 }
 
+func TestExtractSpecID_WithResolvedQuestions(t *testing.T) {
+	content := "---\nspecbox:\n  id: aBcDeFgHiJkL\n  url: https://specbox.io/test\n  version: 3\n  metadata:\n    resolved_questions:\n      q1:\n        question: Which API?\n        answer: REST\n    status: draft\n---\n\n# Hello"
+
+	id := ExtractSpecID(content)
+	if id != "aBcDeFgHiJkL" {
+		t.Errorf("expected aBcDeFgHiJkL, got %q", id)
+	}
+}
+
 func TestReplaceFrontmatter(t *testing.T) {
 	content := "---\nspecbox:\n  id: abc\n---\n# Content"
 	newFM := "---\nspecbox:\n  id: abc\n  version: 2\n---"
