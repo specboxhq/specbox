@@ -7,11 +7,11 @@ import (
 
 func TestGenerateID(t *testing.T) {
 	id := GenerateID()
-	if len(id) != 10 {
-		t.Errorf("expected length 10, got %d", len(id))
+	if len(id) != 12 {
+		t.Errorf("expected length 12, got %d", len(id))
 	}
 	for _, c := range id {
-		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyz0123456789", c) {
+		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", c) {
 			t.Errorf("unexpected character in ID: %c", c)
 		}
 	}
@@ -177,6 +177,58 @@ Content here
 	}
 	if m.Attrs["priority"] != "high" {
 		t.Errorf("expected priority=high, got %s", m.Attrs["priority"])
+	}
+}
+
+func TestParseMarkups_ArrowInQuotedAttr(t *testing.T) {
+	// --> inside a quoted attribute value should not close the tag
+	content := `<!-- specbox:question:aBcDeFgHiJkL status="open" answer="use --> carefully" -->
+Wrapped content
+<!-- /specbox:question -->
+`
+	markups := ParseMarkups(content)
+	if len(markups) != 1 {
+		t.Fatalf("expected 1 markup, got %d", len(markups))
+	}
+	m := markups[0]
+	if m.ID != "aBcDeFgHiJkL" {
+		t.Errorf("expected ID aBcDeFgHiJkL, got %s", m.ID)
+	}
+	if m.Mode != MarkupWrapped {
+		t.Errorf("expected wrapped mode, got %s", m.Mode)
+	}
+	if m.Attrs["answer"] != "use --> carefully" {
+		t.Errorf("expected answer with -->, got %q", m.Attrs["answer"])
+	}
+}
+
+func TestParseMarkups_12CharMixedCaseID(t *testing.T) {
+	content := `<!-- specbox:question:aBcDeFgHiJkL status="open"
+question: What color?
+-->`
+	markups := ParseMarkups(content)
+	if len(markups) != 1 {
+		t.Fatalf("expected 1 markup, got %d", len(markups))
+	}
+	if markups[0].ID != "aBcDeFgHiJkL" {
+		t.Errorf("expected ID aBcDeFgHiJkL, got %s", markups[0].ID)
+	}
+}
+
+func TestParseMarkups_MinMaxAttrs(t *testing.T) {
+	content := `<!-- specbox:question:aBcDeFgHiJkL status="open" type="number" min="1" max="100"
+question: How many?
+-->`
+	markups := ParseMarkups(content)
+	if len(markups) != 1 {
+		t.Fatalf("expected 1 markup, got %d", len(markups))
+	}
+	m := markups[0]
+	if m.Attrs["min"] != "1" {
+		t.Errorf("expected min=1, got %q", m.Attrs["min"])
+	}
+	if m.Attrs["max"] != "100" {
+		t.Errorf("expected max=100, got %q", m.Attrs["max"])
 	}
 }
 

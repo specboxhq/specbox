@@ -3,7 +3,6 @@ package domain
 import (
 	"crypto/rand"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -35,12 +34,12 @@ type Markup struct {
 	EndLine   int               `json:"end_line"`
 }
 
-// idCharset is the set of characters used for markup IDs (a-z, 0-9).
-const idCharset = "abcdefghijklmnopqrstuvwxyz0123456789"
+// idCharset is the set of characters used for markup IDs [a-zA-Z0-9].
+const idCharset = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-// GenerateID generates a 10-character random alphanumeric ID (a-z, 0-9).
+// GenerateID generates a 12-character random alphanumeric ID [a-zA-Z0-9].
 func GenerateID() string {
-	b := make([]byte, 10)
+	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {
 		panic(fmt.Sprintf("crypto/rand failed: %v", err))
 	}
@@ -50,33 +49,178 @@ func GenerateID() string {
 	return string(b)
 }
 
-// openTagRe matches the opening specbox comment tag.
-// Format: <!-- specbox:type:id ... -->  (or without --> for block mode)
-var openTagRe = regexp.MustCompile(`^<!--\s+specbox:(decision|feedback|question):([a-z0-9]{10})\b(.*)$`)
+// validMarkupTypes lists accepted specbox markup types.
+var validMarkupTypes = map[string]bool{
+	"decision": true, "feedback": true, "question": true,
+}
 
-// closeTagRe matches a closing specbox comment tag.
-// Format: <!-- /specbox:type -->
-var closeTagRe = regexp.MustCompile(`^<!--\s+/specbox:(decision|feedback|question)\s*-->`)
+// isIDChar returns true if c is valid in a markup ID [a-zA-Z0-9].
+func isIDChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
 
-// attrRe matches key="value" attribute pairs.
-var attrRe = regexp.MustCompile(`(\w+)="([^"]*)"`)
+// parseOpenTag parses a specbox opening tag from a trimmed line.
+// Returns (type, id, rest, ok). rest is everything after the ID.
+func parseOpenTag(line string) (string, string, string, bool) {
+	// Must start with <!-- then optional whitespace then specbox:
+	if !strings.HasPrefix(line, "<!--") {
+		return "", "", "", false
+	}
+	pos := 4
+	for pos < len(line) && (line[pos] == ' ' || line[pos] == '\t') {
+		pos++
+	}
+	if !strings.HasPrefix(line[pos:], "specbox:") {
+		return "", "", "", false
+	}
+	pos += 8 // skip "specbox:"
 
-// parseAttrs extracts key="value" pairs from a string, returning the attrs map
+	// Read type (until next ':')
+	typeStart := pos
+	for pos < len(line) && line[pos] != ':' {
+		pos++
+	}
+	if pos >= len(line) {
+		return "", "", "", false
+	}
+	mType := line[typeStart:pos]
+	if !validMarkupTypes[mType] {
+		return "", "", "", false
+	}
+	pos++ // skip ':'
+
+	// Read ID (alphanumeric, 10-12 chars)
+	idStart := pos
+	for pos < len(line) && isIDChar(line[pos]) {
+		pos++
+	}
+	id := line[idStart:pos]
+	idLen := len(id)
+	if idLen < 10 || idLen > 12 {
+		return "", "", "", false
+	}
+
+	// Must end at a word boundary (space, tab, or end of string)
+	if pos < len(line) && line[pos] != ' ' && line[pos] != '\t' {
+		return "", "", "", false
+	}
+
+	return mType, id, line[pos:], true
+}
+
+// parseCloseTag checks if a trimmed line is a specbox closing tag.
+// Returns (type, ok).
+func parseCloseTag(line string) (string, bool) {
+	if !strings.HasPrefix(line, "<!--") {
+		return "", false
+	}
+	pos := 4
+	for pos < len(line) && (line[pos] == ' ' || line[pos] == '\t') {
+		pos++
+	}
+	if !strings.HasPrefix(line[pos:], "/specbox:") {
+		return "", false
+	}
+	pos += 9 // skip "/specbox:"
+
+	typeStart := pos
+	for pos < len(line) && line[pos] != ' ' && line[pos] != '\t' && line[pos] != '-' {
+		pos++
+	}
+	mType := line[typeStart:pos]
+	if !validMarkupTypes[mType] {
+		return "", false
+	}
+
+	// Skip whitespace then expect -->
+	for pos < len(line) && (line[pos] == ' ' || line[pos] == '\t') {
+		pos++
+	}
+	if !strings.HasPrefix(line[pos:], "-->") {
+		return "", false
+	}
+	return mType, true
+}
+
+// parseAttrs extracts key="value" pairs from a string using character-by-character
+// parsing. Handles --> inside quoted values correctly. Returns the attrs map
 // and the remaining text after removing all attrs.
 func parseAttrs(s string) (map[string]string, string) {
 	attrs := make(map[string]string)
-	matches := attrRe.FindAllStringSubmatchIndex(s, -1)
-	if len(matches) == 0 {
-		return attrs, strings.TrimSpace(s)
+	var remaining []string
+	i := 0
+	for i < len(s) {
+		// Skip whitespace
+		if s[i] == ' ' || s[i] == '\t' {
+			i++
+			continue
+		}
+
+		// Try to parse key="value": scan for a word followed by ="
+		keyStart := i
+		for i < len(s) && s[i] != '=' && s[i] != ' ' && s[i] != '\t' {
+			i++
+		}
+		if i < len(s) && s[i] == '=' && i+1 < len(s) && s[i+1] == '"' {
+			key := s[keyStart:i]
+			i += 2 // skip ="
+			valStart := i
+			for i < len(s) && s[i] != '"' {
+				i++
+			}
+			if i < len(s) {
+				attrs[key] = s[valStart:i]
+				i++ // skip closing "
+				continue
+			}
+			// Unclosed quote — treat whole thing as remaining
+			i = keyStart
+		}
+
+		// Not an attr — the text from keyStart to i is a non-attr token
+		// If we stopped at end of string or whitespace, the word is already scanned
+		word := s[keyStart:i]
+		if word != "" {
+			remaining = append(remaining, word)
+		}
 	}
-	for _, m := range matches {
-		key := s[m[2]:m[3]]
-		val := s[m[4]:m[5]]
-		attrs[key] = val
+	return attrs, strings.TrimSpace(strings.Join(remaining, " "))
+}
+
+// endsWithCloseComment checks if s ends with --> accounting for possible
+// content before it. Uses character scanning to avoid false matches inside quotes.
+func endsWithCloseComment(s string) bool {
+	// Scan for --> not inside quotes
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '"' {
+			inQuote = !inQuote
+			continue
+		}
+		if !inQuote && i+2 < len(s) && s[i] == '-' && s[i+1] == '-' && s[i+2] == '>' {
+			// Check that nothing non-whitespace follows
+			rest := strings.TrimSpace(s[i+3:])
+			if rest == "" {
+				return true
+			}
+		}
 	}
-	// Remove all attr matches from the string to get remaining content
-	remaining := attrRe.ReplaceAllString(s, "")
-	return attrs, strings.TrimSpace(remaining)
+	return false
+}
+
+// stripCloseComment removes the trailing --> (outside quotes) from s.
+func stripCloseComment(s string) string {
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '"' {
+			inQuote = !inQuote
+			continue
+		}
+		if !inQuote && i+2 < len(s) && s[i] == '-' && s[i+1] == '-' && s[i+2] == '>' {
+			return strings.TrimSpace(s[:i])
+		}
+	}
+	return s
 }
 
 // ParseMarkups finds all specbox markups in document content.
@@ -110,16 +254,13 @@ func ParseMarkups(content string) []Markup {
 			continue
 		}
 
-		line := trimmed
-		m := openTagRe.FindStringSubmatch(line)
-		if m == nil {
+		mTypeStr, mID, rest, ok := parseOpenTag(trimmed)
+		if !ok {
 			i++
 			continue
 		}
 
-		mType := MarkupType(m[1])
-		mID := m[2]
-		rest := m[3] // everything after specbox:type:id
+		mType := MarkupType(mTypeStr)
 
 		// Parse attributes and remaining text from the rest of the opening line
 		attrs, remaining := parseAttrs(rest)
@@ -128,23 +269,19 @@ func ParseMarkups(content string) []Markup {
 		status := attrs["status"]
 		delete(attrs, "status")
 
-		// Determine mode based on whether the first line ends with -->
-		endsWithClose := strings.HasSuffix(strings.TrimSpace(rest), "-->")
+		// Determine mode based on whether the first line ends with --> (outside quotes)
+		closed := endsWithCloseComment(rest)
 
-		if endsWithClose {
+		if closed {
 			// Could be inline or wrapped
 			// Remove trailing --> from remaining
-			remaining = strings.TrimSpace(remaining)
-			if strings.HasSuffix(remaining, "-->") {
-				remaining = strings.TrimSpace(remaining[:len(remaining)-3])
-			}
+			remaining = stripCloseComment(remaining)
 
 			// Check if there's a closing tag further down
 			wrappedEnd := -1
-			closePrefix := fmt.Sprintf("/specbox:%s", mType)
 			for j := i + 1; j < len(lines); j++ {
-				trimmed := strings.TrimSpace(lines[j])
-				if closeTagRe.MatchString(trimmed) && strings.Contains(trimmed, closePrefix) {
+				closeType, isClose := parseCloseTag(strings.TrimSpace(lines[j]))
+				if isClose && closeType == mTypeStr {
 					wrappedEnd = j
 					break
 				}
@@ -185,7 +322,8 @@ func ParseMarkups(content string) []Markup {
 			// Block mode — multiline YAML comment, find closing -->
 			blockEnd := i
 			for j := i + 1; j < len(lines); j++ {
-				if strings.TrimSpace(lines[j]) == "-->" || strings.HasSuffix(strings.TrimSpace(lines[j]), "-->") {
+				t := strings.TrimSpace(lines[j])
+				if t == "-->" || endsWithCloseComment(t) {
 					blockEnd = j
 					break
 				}
@@ -194,11 +332,10 @@ func ParseMarkups(content string) []Markup {
 			// Collect the YAML content lines (from after the opening tag line to before -->)
 			var yamlLines []string
 			for j := i + 1; j <= blockEnd; j++ {
-				trimmed := strings.TrimSpace(lines[j])
-				if trimmed == "-->" || strings.HasSuffix(trimmed, "-->") {
+				t := strings.TrimSpace(lines[j])
+				if t == "-->" || endsWithCloseComment(t) {
 					// If the line has content before -->, include it minus the -->
-					before := strings.TrimSuffix(trimmed, "-->")
-					before = strings.TrimSpace(before)
+					before := stripCloseComment(t)
 					if before != "" {
 						yamlLines = append(yamlLines, before)
 					}

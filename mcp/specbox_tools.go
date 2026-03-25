@@ -25,6 +25,8 @@ func registerSpecboxTools(s *server.MCPServer, svc domain.DocumentService) {
 			mcp.WithString("decision_type", mcp.Description("For decisions: choice, multi, yesno, number, date, ordered, approval, range, url, email, color, file. Written as type= in the markup.")),
 			mcp.WithArray("options", mcp.Description("List of options for choice/multi/ordered. Written as pipe-separated options= attribute. Not needed if wrapped content has list items."), mcp.Items(map[string]any{"type": "string"})),
 			mcp.WithBoolean("other", mcp.Description("Include 'Other' freeform input for choice/multi/ordered (default true). Set false to restrict to listed options only.")),
+			mcp.WithString("min", mcp.Description("Minimum value for number/range/date types. Written as min= attribute.")),
+			mcp.WithString("max", mcp.Description("Maximum value for number/range/date types. Written as max= attribute.")),
 			mcp.WithNumber("start_line", mcp.Description("Line number to insert at (1-based)")),
 			mcp.WithNumber("end_line", mcp.Description("Last line to wrap (1-based). If provided with start_line, creates wrapped mode.")),
 			mcp.WithString("heading", mcp.Description("Insert after this heading (alternative to start_line)")),
@@ -37,7 +39,7 @@ func registerSpecboxTools(s *server.MCPServer, svc domain.DocumentService) {
 		mcp.NewTool("update_markup",
 			mcp.WithDescription("Update an existing specbox markup by ID. Only provided fields are changed."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
-			mcp.WithString("id", mcp.Required(), mcp.Description("Markup ID (10-char alphanumeric)")),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Markup ID (12-char alphanumeric)")),
 			mcp.WithString("question", mcp.Description("Updated question text")),
 			mcp.WithString("status", mcp.Description("Updated status (e.g. 'open', 'resolved')")),
 			mcp.WithString("decision_type", mcp.Description("Updated decision type")),
@@ -53,7 +55,7 @@ func registerSpecboxTools(s *server.MCPServer, svc domain.DocumentService) {
 		mcp.NewTool("delete_markup",
 			mcp.WithDescription("Remove a specbox markup by ID. For wrapped markups, removes tags but keeps the wrapped content."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
-			mcp.WithString("id", mcp.Required(), mcp.Description("Markup ID (10-char alphanumeric)")),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Markup ID (12-char alphanumeric)")),
 		),
 		deleteMarkupHandler(svc),
 	)
@@ -74,7 +76,7 @@ func registerSpecboxTools(s *server.MCPServer, svc domain.DocumentService) {
 		mcp.NewTool("resolve_markup",
 			mcp.WithDescription("Mark a specbox markup as resolved with an answer or response."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
-			mcp.WithString("id", mcp.Required(), mcp.Description("Markup ID (10-char alphanumeric)")),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Markup ID (12-char alphanumeric)")),
 			mcp.WithString("answer", mcp.Description("Answer text (for decisions)")),
 			mcp.WithString("response", mcp.Description("Response text (for feedback/questions)")),
 		),
@@ -129,6 +131,8 @@ func addMarkupHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 		decisionType, _ := request.RequireString("decision_type")
 		options := parseStringSliceParam(request, "options")
 		other := request.GetBool("other", true)
+		minVal, _ := request.RequireString("min")
+		maxVal, _ := request.RequireString("max")
 		startLine := request.GetInt("start_line", 0)
 		endLine := request.GetInt("end_line", 0)
 		heading, _ := request.RequireString("heading")
@@ -162,6 +166,12 @@ func addMarkupHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 			if !other {
 				parts = append(parts, "other=\"false\"")
 			}
+			if minVal != "" {
+				parts = append(parts, fmt.Sprintf("min=\"%s\"", minVal))
+			}
+			if maxVal != "" {
+				parts = append(parts, fmt.Sprintf("max=\"%s\"", maxVal))
+			}
 			openTag += " " + strings.Join(parts, " ") + " -->"
 			closeTag := fmt.Sprintf("<!-- /specbox:%s -->", mType)
 
@@ -190,6 +200,12 @@ func addMarkupHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 		}
 		if !other {
 			openTag += " other=\"false\""
+		}
+		if minVal != "" {
+			openTag += fmt.Sprintf(" min=\"%s\"", minVal)
+		}
+		if maxVal != "" {
+			openTag += fmt.Sprintf(" max=\"%s\"", maxVal)
 		}
 		blockLines = append(blockLines, openTag)
 		if question != "" {
