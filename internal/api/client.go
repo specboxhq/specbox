@@ -71,6 +71,15 @@ func (c *Client) Set(specID string, metadata map[string]any) (*SpecResponse, int
 	return c.doJSON("PATCH", c.APIURL+"/v1/specs/"+specID, body)
 }
 
+// UpdateQuestionStatus resolves or reopens a question.
+func (c *Client) UpdateQuestionStatus(specID, questionID, status, resolvedValue string) (*SpecResponse, int, error) {
+	body := map[string]any{"status": status}
+	if resolvedValue != "" {
+		body["resolved_value"] = resolvedValue
+	}
+	return c.doJSON("PATCH", c.APIURL+"/v1/specs/"+specID+"/questions/"+questionID, body)
+}
+
 func (c *Client) doJSON(method, url string, body any) (*SpecResponse, int, error) {
 	var bodyReader io.Reader
 	if body != nil {

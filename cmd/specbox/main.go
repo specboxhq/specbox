@@ -42,6 +42,16 @@ func main() {
 		runPull()
 	case "set":
 		runSet()
+	case "resolve":
+		runResolve()
+	case "reopen":
+		runReopen()
+	case "status":
+		runStatus()
+	case "lock":
+		runLock()
+	case "unlock":
+		runUnlock()
 	case "check":
 		runCheck()
 	case "help", "--help", "-h":
@@ -68,6 +78,11 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  push        Push a spec to specbox.io")
 	fmt.Fprintln(os.Stderr, "  pull        Pull responses from specbox.io")
 	fmt.Fprintln(os.Stderr, "  set         Set spec metadata without pushing content")
+	fmt.Fprintln(os.Stderr, "  resolve     Resolve a question")
+	fmt.Fprintln(os.Stderr, "  reopen      Reopen a resolved question")
+	fmt.Fprintln(os.Stderr, "  status      Change spec status")
+	fmt.Fprintln(os.Stderr, "  lock        Lock a spec")
+	fmt.Fprintln(os.Stderr, "  unlock      Unlock a spec")
 	fmt.Fprintln(os.Stderr, "  check       Check sync status and validate spec")
 }
 
