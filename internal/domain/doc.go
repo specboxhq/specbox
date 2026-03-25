@@ -737,6 +737,39 @@ func (d *Document) ShiftHeadings(startLine int, endLine int, levels int) error {
 	return nil
 }
 
+// buildTableRow creates a pipe-delimited row from values (no alignment).
+func buildTableRow(values []string) string {
+	row := "|"
+	for _, v := range values {
+		row += " " + v + " |"
+	}
+	return row
+}
+
+// realignTableAt finds the table containing lineNum (0-based index) and realigns all rows.
+func realignTableAt(lines []string, lineIdx int) []string {
+	// Walk backward to find table start
+	start := lineIdx
+	for start > 0 && (isTableRow(lines[start-1]) || isTableSeparator(lines[start-1])) {
+		start--
+	}
+	// Walk forward to find table end
+	end := lineIdx
+	for end < len(lines)-1 && (isTableRow(lines[end+1]) || isTableSeparator(lines[end+1])) {
+		end++
+	}
+
+	// Extract, align, and splice back
+	tableRows := lines[start : end+1]
+	aligned := alignTable(tableRows)
+
+	result := make([]string, 0, len(lines))
+	result = append(result, lines[:start]...)
+	result = append(result, aligned...)
+	result = append(result, lines[end+1:]...)
+	return result
+}
+
 // InsertTableRow inserts a row into a markdown table, auto-formatting with pipes.
 func (d *Document) InsertTableRow(lineNum int, values []string) error {
 	lines := d.lines()
@@ -744,41 +777,26 @@ func (d *Document) InsertTableRow(lineNum int, values []string) error {
 		return ErrLineOutOfRange
 	}
 
-	// Find the table context to determine column widths
-	// Look for a nearby table row to match formatting
-	var refLine string
-	if lineNum > 1 && lineNum-2 < len(lines) && strings.Contains(lines[lineNum-2], "|") {
-		refLine = lines[lineNum-2]
-	} else if lineNum <= len(lines) && strings.Contains(lines[lineNum-1], "|") {
-		refLine = lines[lineNum-1]
+	// Verify we're inserting near a table
+	nearTable := false
+	if lineNum > 1 && lineNum-2 < len(lines) && isTableRow(lines[lineNum-2]) {
+		nearTable = true
+	} else if lineNum <= len(lines) && isTableRow(lines[lineNum-1]) {
+		nearTable = true
 	}
-
-	if refLine == "" {
+	if !nearTable {
 		return ErrNotATable
 	}
 
-	// Parse column widths from the reference line
-	refCols := parseTableRow(refLine)
-	colWidths := make([]int, len(refCols))
-	for i, col := range refCols {
-		colWidths[i] = displayWidth(col)
-	}
-
-	// Build the new row, padding to match column widths
-	row := "|"
-	for i, v := range values {
-		width := displayWidth(v)
-		if i < len(colWidths) && colWidths[i] > width {
-			width = colWidths[i]
-		}
-		row += " " + v + strings.Repeat(" ", width-displayWidth(v)) + " |"
-	}
-
+	// Insert the new row (unaligned — realignTableAt will fix it)
+	row := buildTableRow(values)
 	newLines := make([]string, 0, len(lines)+1)
 	newLines = append(newLines, lines[:lineNum-1]...)
 	newLines = append(newLines, row)
 	newLines = append(newLines, lines[lineNum-1:]...)
-	d.setLines(newLines)
+
+	// Realign the entire table
+	d.setLines(realignTableAt(newLines, lineNum-1))
 	return nil
 }
 
@@ -792,35 +810,11 @@ func (d *Document) UpdateTableRow(lineNum int, values []string) error {
 		return ErrNotATable
 	}
 
-	// Find a reference line for column widths (check header or adjacent row)
-	var refLine string
-	for i := lineNum - 2; i >= 0; i-- {
-		if strings.Contains(lines[i], "|") {
-			refLine = lines[i]
-			break
-		}
-	}
-	if refLine == "" {
-		refLine = lines[lineNum-1]
-	}
+	// Replace the row (unaligned — realignTableAt will fix it)
+	lines[lineNum-1] = buildTableRow(values)
 
-	refCols := parseTableRow(refLine)
-	colWidths := make([]int, len(refCols))
-	for i, col := range refCols {
-		colWidths[i] = displayWidth(col)
-	}
-
-	row := "|"
-	for i, v := range values {
-		width := displayWidth(v)
-		if i < len(colWidths) && colWidths[i] > width {
-			width = colWidths[i]
-		}
-		row += " " + v + strings.Repeat(" ", width-displayWidth(v)) + " |"
-	}
-
-	lines[lineNum-1] = row
-	d.setLines(lines)
+	// Realign the entire table
+	d.setLines(realignTableAt(lines, lineNum-1))
 	return nil
 }
 

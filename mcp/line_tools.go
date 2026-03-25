@@ -11,7 +11,7 @@ import (
 func registerLineTools(s *server.MCPServer, svc domain.DocumentService) {
 	s.AddTool(
 		mcp.NewTool("insert_text",
-			mcp.WithDescription("Insert content at a position in a document. Anchor by line_num, heading, or text match. Use position 'end' with no anchor to append. Position defaults to 'after'."),
+			mcp.WithDescription("Insert content at a position in a document. Anchor by line_num, heading, or text match. Use position 'end' with no anchor to append. Position defaults to 'after'. For multiple inserts/edits in one document, prefer apply_edits."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
 			mcp.WithString("content", mcp.Required(), mcp.Description("Content to insert")),
 			mcp.WithString("position", mcp.Description("'before', 'after' (default), or 'end' (append to document, no anchor needed)")),

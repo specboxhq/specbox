@@ -12,7 +12,7 @@ import (
 func registerMarkdownTools(s *server.MCPServer, svc domain.DocumentService) {
 	s.AddTool(
 		mcp.NewTool("set_checkbox",
-			mcp.WithDescription("Set a markdown checkbox checked or unchecked (- [ ] ↔ - [x]). Provide line_num OR text to identify the checkbox. When text is provided, finds the first checkbox line containing that text."),
+			mcp.WithDescription("Set a markdown checkbox checked or unchecked (- [ ] ↔ - [x]). Provide line_num OR text to identify the checkbox. When text is provided, finds the first checkbox line containing that text. For checking/unchecking multiple checkboxes at once, prefer bulk_set_checkboxes."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
 			mcp.WithNumber("line_num", mcp.Description("Line number of the checkbox (1-based). Optional if text is provided.")),
 			mcp.WithString("text", mcp.Description("Text to match within a checkbox line. Finds and toggles the first checkbox containing this text.")),
@@ -77,10 +77,25 @@ func registerMarkdownTools(s *server.MCPServer, svc domain.DocumentService) {
 		editTableRowHandler(svc),
 	)
 
+	// bulk_set_checkboxes
+	s.AddTool(
+		mcp.NewTool("bulk_set_checkboxes",
+			mcp.WithDescription("Check or uncheck all checkboxes in a range. Use heading or heading_line to scope to a section. Use filter to only toggle checkboxes that match a specific state (e.g. only uncheck checked items)."),
+			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
+			mcp.WithBoolean("checked", mcp.Required(), mcp.Description("true to check all, false to uncheck all")),
+			mcp.WithNumber("start_line", mcp.Description("Restrict to lines starting from (1-based, 0=full doc)")),
+			mcp.WithNumber("end_line", mcp.Description("Restrict to lines ending at (1-based, 0=full doc)")),
+			mcp.WithString("heading", mcp.Description("Scope to a section by heading text (without # prefix)")),
+			mcp.WithNumber("heading_line", mcp.Description("Scope to a section by heading line number (from get_table_of_contents)")),
+			mcp.WithString("filter", mcp.Description("Only toggle matching checkboxes: 'all' (default), 'checked' (only toggle checked→unchecked), 'unchecked' (only toggle unchecked→checked)")),
+		),
+		bulkSetCheckboxesHandler(svc),
+	)
+
 	// get_checkboxes
 	s.AddTool(
 		mcp.NewTool("get_checkboxes",
-			mcp.WithDescription("Extract markdown checkboxes from a document. Filter by checked/unchecked status. Use tree format to see checkboxes grouped under their parent headings."),
+			mcp.WithDescription("Extract markdown checkboxes from a document. Filter by checked/unchecked status. Use tree format to see checkboxes grouped under their parent headings. Use get_table_of_contents first to find section line ranges, then use start_line/end_line to scope results."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
 			mcp.WithString("filter", mcp.Description("Filter: 'all' (default), 'checked', or 'unchecked'")),
 			mcp.WithString("format", mcp.Description("Output format: 'list' (default) or 'tree' (grouped by headings)")),
@@ -130,6 +145,100 @@ func checkCheckboxHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return jsonResult(docSummary(doc))
+	}
+}
+
+func bulkSetCheckboxesHandler(svc domain.DocumentService) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		path, err := request.RequireString("path")
+		if err != nil {
+			return mcp.NewToolResultError("path is required"), nil
+		}
+		checked := request.GetBool("checked", false)
+		startLine := request.GetInt("start_line", 0)
+		endLine := request.GetInt("end_line", 0)
+		heading, _ := request.RequireString("heading")
+		headingLine := request.GetInt("heading_line", 0)
+		filter := request.GetString("filter", "all")
+
+		// Resolve heading/heading_line to start_line/end_line
+		if heading != "" {
+			_, sectionStart, sectionEnd, err := svc.GetSection(path, heading)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			startLine = sectionStart
+			endLine = sectionEnd
+		} else if headingLine > 0 {
+			// Find the section boundaries from the heading line
+			toc, err := svc.GetTableOfContents(path)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			doc, err := svc.GetDocument(path)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			found := false
+			for i, h := range toc {
+				if h.LineNumber == headingLine {
+					startLine = h.LineNumber
+					endLine = doc.GetLineCount()
+					for j := i + 1; j < len(toc); j++ {
+						if toc[j].Level <= h.Level {
+							endLine = toc[j].LineNumber - 1
+							break
+						}
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				return mcp.NewToolResultError("no heading found at line"), nil
+			}
+		}
+
+		// Get checkboxes in range
+		checkboxResult, err := svc.GetCheckboxes(path, "all", "list", startLine, endLine)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		items, ok := checkboxResult.([]domain.CheckboxItem)
+		if !ok {
+			return mcp.NewToolResultError("unexpected checkbox result type"), nil
+		}
+
+		// Filter and toggle
+		toggled := 0
+		for _, item := range items {
+			switch filter {
+			case "checked":
+				if !item.Checked {
+					continue
+				}
+			case "unchecked":
+				if item.Checked {
+					continue
+				}
+			}
+			// Skip if already in desired state
+			if item.Checked == checked {
+				continue
+			}
+			if _, err := svc.CheckCheckbox(path, item.Line, checked); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			toggled++
+		}
+
+		doc, err := svc.GetDocument(path)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		result := docSummary(doc)
+		result["toggled"] = toggled
+		return jsonResult(result)
 	}
 }
 

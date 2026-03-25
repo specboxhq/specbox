@@ -10,6 +10,47 @@ import (
 	"github.com/specboxhq/specbox/internal/domain"
 )
 
+// markdownNoise contains tokens that are markdown syntax, not real words.
+var markdownNoise = map[string]bool{
+	"#": true, "##": true, "###": true, "####": true, "#####": true, "######": true,
+	"-": true, "*": true, "+": true, // list markers
+	"[": true, "]": true, "[x]": true, "[X]": true, // checkbox parts
+	"|": true, "---": true, "<!--": true, "-->": true,
+}
+
+func countWords(content string) int {
+	count := 0
+	inHTMLComment := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Skip code fence lines
+		if strings.HasPrefix(trimmed, "```") {
+			continue
+		}
+		// Skip frontmatter delimiters
+		if trimmed == "---" {
+			continue
+		}
+		for _, word := range strings.Fields(line) {
+			// Track HTML comments
+			if strings.HasPrefix(word, "<!--") {
+				inHTMLComment = true
+			}
+			if inHTMLComment {
+				if strings.HasSuffix(word, "-->") {
+					inHTMLComment = false
+				}
+				continue
+			}
+			if markdownNoise[word] {
+				continue
+			}
+			count++
+		}
+	}
+	return count
+}
+
 func registerReadTools(s *server.MCPServer, svc domain.DocumentService) {
 	s.AddTool(
 		mcp.NewTool("list_documents",
@@ -51,7 +92,7 @@ func registerReadTools(s *server.MCPServer, svc domain.DocumentService) {
 
 	s.AddTool(
 		mcp.NewTool("get_lines",
-			mcp.WithDescription("Read a specific line range from a document (1-based, inclusive). Omit end_line to read to end of document. Use get_table_of_contents or find_line first to locate the lines you need."),
+			mcp.WithDescription("Read a specific line range from a document (1-based, inclusive). Omit end_line to read to end of document. Use get_table_of_contents or find_text first to locate the lines you need."),
 			mcp.WithString("path",
 				mcp.Required(),
 				mcp.Description("Document path"),
@@ -104,6 +145,7 @@ func registerReadTools(s *server.MCPServer, svc domain.DocumentService) {
 		),
 		getTableOfContentsHandler(svc),
 	)
+
 }
 
 func listDocumentsHandler(svc domain.DocumentService) server.ToolHandlerFunc {
@@ -191,6 +233,7 @@ func getDocumentHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 			"path":       doc.Path,
 			"content":    doc.Content,
 			"line_count": doc.GetLineCount(),
+			"word_count": countWords(doc.Content),
 			"created_at": doc.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			"updated_at": doc.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		}
@@ -340,20 +383,60 @@ func getTableOfContentsHandler(svc domain.DocumentService) server.ToolHandlerFun
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		type tocEntry struct {
-			Heading    string `json:"heading"`
-			Level      int    `json:"level"`
-			LineNumber int    `json:"line_number"`
+		doc, err := svc.GetDocument(path)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
+		totalLines := doc.GetLineCount()
+
+		type tasksSummary struct {
+			Total   int `json:"total"`
+			Checked int `json:"checked"`
+		}
+		type tocEntry struct {
+			Heading   string        `json:"heading"`
+			Level     int           `json:"level"`
+			StartLine int           `json:"start_line"`
+			EndLine   int           `json:"end_line"`
+			Tasks     *tasksSummary `json:"tasks,omitempty"`
+		}
+
 		entries := make([]tocEntry, len(toc))
 		for i, h := range toc {
+			// end_line: last line before next same-or-higher-level heading, or EOF
+			endLine := totalLines
+			for j := i + 1; j < len(toc); j++ {
+				if toc[j].Level <= h.Level {
+					endLine = toc[j].LineNumber - 1
+					break
+				}
+			}
+
+			// Check for checkboxes in this section
+			checkboxes, cbErr := svc.GetCheckboxes(path, "all", "list", h.LineNumber, endLine)
+			var tasks *tasksSummary
+			if cbErr == nil {
+				if items, ok := checkboxes.([]domain.CheckboxItem); ok && len(items) > 0 {
+					checked := 0
+					for _, item := range items {
+						if item.Checked {
+							checked++
+						}
+					}
+					tasks = &tasksSummary{Total: len(items), Checked: checked}
+				}
+			}
+
 			entries[i] = tocEntry{
-				Heading:    h.Heading,
-				Level:      h.Level,
-				LineNumber: h.LineNumber,
+				Heading:   h.Heading,
+				Level:     h.Level,
+				StartLine: h.LineNumber,
+				EndLine:   endLine,
+				Tasks:     tasks,
 			}
 		}
 
 		return jsonResult(entries)
 	}
 }
+

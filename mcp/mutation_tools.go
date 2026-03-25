@@ -23,7 +23,7 @@ func registerMutationTools(s *server.MCPServer, svc domain.DocumentService) {
 	// replace (consolidated replace_nth/replace_all/replace_regex)
 	s.AddTool(
 		mcp.NewTool("replace_text",
-			mcp.WithDescription("Find and replace text in a document. Use old_text for literal matching OR pattern for regex. Set n to replace a specific occurrence (default 0 = all). Supports capture groups ($1, $2) and (?i) for regex."),
+			mcp.WithDescription("Find and replace text in a document. Use old_text for literal matching OR pattern for regex. Set n to replace a specific occurrence (default 0 = all). Supports capture groups ($1, $2) and (?i) for regex. For multiple edits to the same document, prefer apply_edits to avoid line offset issues."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
 			mcp.WithString("new_text", mcp.Required(), mcp.Description("Replacement text")),
 			mcp.WithString("old_text", mcp.Description("Literal text to find. Use this OR pattern.")),
