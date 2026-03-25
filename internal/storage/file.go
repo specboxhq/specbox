@@ -489,6 +489,21 @@ func (fs *FileStore) GetCheckboxes(path string, filter string, format string, st
 
 // --- Formatting ---
 
+func (fs *FileStore) ApplyEdits(path string, edits []domain.Edit) (*domain.Document, []domain.EditResult, error) {
+	doc, err := fs.loadDoc(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	results, err := doc.ApplyEdits(edits)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := fs.saveDoc(doc); err != nil {
+		return nil, nil, err
+	}
+	return doc, results, nil
+}
+
 func (fs *FileStore) FormatDocument(path string, startLine int, endLine int) (*domain.Document, error) {
 	return fs.mutateDoc(path, func(doc *domain.Document) error {
 		return doc.Format(startLine, endLine)

@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -68,6 +70,69 @@ func registerLineTools(s *server.MCPServer, svc domain.DocumentService) {
 		),
 		indentLinesHandler(svc),
 	)
+
+	s.AddTool(
+		mcp.NewTool("apply_edits",
+			mcp.WithDescription("Atomically apply multiple edits to a document. All line numbers reference the original document snapshot — no offset calculation needed. Prefer over multiple insert/delete/replace calls for 2+ edits."),
+			mcp.WithString("path", mcp.Required(), mcp.Description("Document path")),
+			mcp.WithArray("edits", mcp.Required(), mcp.Description("Array of edit operations. Each has an 'op' field: 'insert' (line, content, optional position before/after), 'delete' (start_line, end_line), 'replace' (start_line, end_line, content), 'replace_text' (line, old_text, new_text)."), mcp.Items(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"op":         map[string]any{"type": "string", "description": "Operation: insert, delete, replace, or replace_text"},
+					"line":       map[string]any{"type": "integer", "description": "Line number (for insert, replace_text)"},
+					"start_line": map[string]any{"type": "integer", "description": "Start line (for delete, replace)"},
+					"end_line":   map[string]any{"type": "integer", "description": "End line (for delete, replace)"},
+					"content":    map[string]any{"type": "string", "description": "Content (for insert, replace)"},
+					"position":   map[string]any{"type": "string", "description": "For insert: 'before' (default) or 'after'"},
+					"old_text":   map[string]any{"type": "string", "description": "Text to find (for replace_text)"},
+					"new_text":   map[string]any{"type": "string", "description": "Replacement text (for replace_text)"},
+				},
+				"required": []string{"op"},
+			})),
+		),
+		applyEditsHandler(svc),
+	)
+}
+
+func applyEditsHandler(svc domain.DocumentService) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		path, err := request.RequireString("path")
+		if err != nil {
+			return mcp.NewToolResultError("path is required"), nil
+		}
+
+		// Parse edits from the request
+		args := request.GetArguments()
+		editsRaw, ok := args["edits"]
+		if !ok {
+			return mcp.NewToolResultError("edits is required"), nil
+		}
+
+		// Marshal/unmarshal through JSON to handle the dynamic array
+		editsJSON, err := json.Marshal(editsRaw)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid edits: %v", err)), nil
+		}
+
+		var edits []domain.Edit
+		if err := json.Unmarshal(editsJSON, &edits); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid edits: %v", err)), nil
+		}
+
+		if len(edits) == 0 {
+			return mcp.NewToolResultError("edits array is empty"), nil
+		}
+
+		doc, results, err := svc.ApplyEdits(path, edits)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		response := docSummary(doc)
+		response["edits_applied"] = len(results)
+		response["results"] = results
+		return jsonResult(response)
+	}
 }
 
 func insertTextHandler(svc domain.DocumentService) server.ToolHandlerFunc {

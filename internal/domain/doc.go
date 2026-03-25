@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -1153,6 +1154,145 @@ func parseTableRow(line string) []string {
 		cols[i] = strings.TrimSpace(p)
 	}
 	return cols
+}
+
+// Edit represents a single edit operation for batch editing.
+type Edit struct {
+	Op        string `json:"op"`                   // "insert", "delete", "replace", "replace_text"
+	Line      int    `json:"line,omitempty"`        // For insert, replace_text
+	StartLine int    `json:"start_line,omitempty"`  // For delete, replace
+	EndLine   int    `json:"end_line,omitempty"`    // For delete, replace
+	Content   string `json:"content,omitempty"`     // For insert, replace
+	Position  string `json:"position,omitempty"`    // For insert: "before" (default) or "after"
+	OldText   string `json:"old_text,omitempty"`    // For replace_text
+	NewText   string `json:"new_text,omitempty"`    // For replace_text
+}
+
+// EditResult summarizes a single applied edit.
+type EditResult struct {
+	Op   string `json:"op"`
+	Line int    `json:"line,omitempty"`
+	From int    `json:"from,omitempty"`
+	To   int    `json:"to,omitempty"`
+}
+
+// ApplyEdits atomically applies a batch of edits to the document.
+// All line numbers reference the original document snapshot — the server sorts
+// and applies bottom-up so offsets don't cascade.
+// Returns a summary of each applied edit. Fails entirely on any validation error.
+func (d *Document) ApplyEdits(edits []Edit) ([]EditResult, error) {
+	lines := d.lines()
+	lineCount := len(lines)
+
+	// Phase 1: validate all edits against the original snapshot
+	for i, e := range edits {
+		switch e.Op {
+		case "insert":
+			if e.Line < 1 || e.Line > lineCount+1 {
+				return nil, fmt.Errorf("edit %d: insert line %d out of range (1-%d)", i, e.Line, lineCount+1)
+			}
+			if e.Content == "" {
+				return nil, fmt.Errorf("edit %d: insert requires content", i)
+			}
+		case "delete":
+			if e.StartLine < 1 || e.EndLine < e.StartLine || e.EndLine > lineCount {
+				return nil, fmt.Errorf("edit %d: delete range %d-%d out of range (1-%d)", i, e.StartLine, e.EndLine, lineCount)
+			}
+		case "replace":
+			if e.StartLine < 1 || e.EndLine < e.StartLine || e.EndLine > lineCount {
+				return nil, fmt.Errorf("edit %d: replace range %d-%d out of range (1-%d)", i, e.StartLine, e.EndLine, lineCount)
+			}
+			if e.Content == "" {
+				return nil, fmt.Errorf("edit %d: replace requires content", i)
+			}
+		case "replace_text":
+			if e.Line < 1 || e.Line > lineCount {
+				return nil, fmt.Errorf("edit %d: replace_text line %d out of range (1-%d)", i, e.Line, lineCount)
+			}
+			if e.OldText == "" {
+				return nil, fmt.Errorf("edit %d: replace_text requires old_text", i)
+			}
+			if !strings.Contains(lines[e.Line-1], e.OldText) {
+				return nil, fmt.Errorf("edit %d: replace_text old_text %q not found on line %d", i, e.OldText, e.Line)
+			}
+		default:
+			return nil, fmt.Errorf("edit %d: unknown op %q (must be insert, delete, replace, or replace_text)", i, e.Op)
+		}
+	}
+
+	// Phase 2: sort edits bottom-up by primary line number (highest first)
+	// so offsets don't cascade. For same line, process deletes before inserts.
+	type indexedEdit struct {
+		idx  int
+		edit Edit
+	}
+	sorted := make([]indexedEdit, len(edits))
+	for i, e := range edits {
+		sorted[i] = indexedEdit{idx: i, edit: e}
+	}
+	sort.SliceStable(sorted, func(a, b int) bool {
+		lineA := sorted[a].edit.Line
+		if lineA == 0 {
+			lineA = sorted[a].edit.StartLine
+		}
+		lineB := sorted[b].edit.Line
+		if lineB == 0 {
+			lineB = sorted[b].edit.StartLine
+		}
+		if lineA != lineB {
+			return lineA > lineB // higher line numbers first
+		}
+		// Same line: deletes/replaces before inserts
+		opOrder := map[string]int{"delete": 0, "replace": 1, "replace_text": 2, "insert": 3}
+		return opOrder[sorted[a].edit.Op] < opOrder[sorted[b].edit.Op]
+	})
+
+	// Phase 3: apply edits bottom-up
+	results := make([]EditResult, len(edits))
+	for _, ie := range sorted {
+		e := ie.edit
+		switch e.Op {
+		case "insert":
+			pos := e.Position
+			if pos == "" {
+				pos = "before"
+			}
+			insertAt := e.Line
+			if pos == "after" {
+				insertAt = e.Line + 1
+			}
+			newContent := strings.Split(e.Content, "\n")
+			newLines := make([]string, 0, len(lines)+len(newContent))
+			newLines = append(newLines, lines[:insertAt-1]...)
+			newLines = append(newLines, newContent...)
+			newLines = append(newLines, lines[insertAt-1:]...)
+			lines = newLines
+			results[ie.idx] = EditResult{Op: "insert", Line: e.Line}
+
+		case "delete":
+			newLines := make([]string, 0, len(lines)-(e.EndLine-e.StartLine+1))
+			newLines = append(newLines, lines[:e.StartLine-1]...)
+			newLines = append(newLines, lines[e.EndLine:]...)
+			lines = newLines
+			results[ie.idx] = EditResult{Op: "delete", From: e.StartLine, To: e.EndLine}
+
+		case "replace":
+			newContent := strings.Split(e.Content, "\n")
+			newLines := make([]string, 0, len(lines)-e.EndLine+e.StartLine-1+len(newContent))
+			newLines = append(newLines, lines[:e.StartLine-1]...)
+			newLines = append(newLines, newContent...)
+			newLines = append(newLines, lines[e.EndLine:]...)
+			lines = newLines
+			results[ie.idx] = EditResult{Op: "replace", From: e.StartLine, To: e.EndLine}
+
+		case "replace_text":
+			lines[e.Line-1] = strings.Replace(lines[e.Line-1], e.OldText, e.NewText, 1)
+			results[ie.idx] = EditResult{Op: "replace_text", Line: e.Line}
+		}
+	}
+
+	d.setLines(lines)
+	return results, nil
 }
 
 // Append appends content to the end of the document.

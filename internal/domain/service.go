@@ -117,6 +117,11 @@ type DocumentService interface {
 	// GetCheckboxes extracts markdown checkboxes with optional filtering.
 	GetCheckboxes(path string, filter string, format string, startLine int, endLine int) (any, error)
 
+	// --- Batch editing ---
+
+	// ApplyEdits atomically applies multiple edits to a document.
+	ApplyEdits(path string, edits []Edit) (*Document, []EditResult, error)
+
 	// --- Formatting ---
 
 	// FormatDocument normalizes formatting (trailing whitespace, blank lines).
