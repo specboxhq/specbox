@@ -233,32 +233,12 @@ func runSet() {
 
 	metadata := map[string]any{}
 	for _, kv := range kvPairs {
-		parts := strings.SplitN(kv, "=", 2)
-		if len(parts) != 2 {
-			fmt.Fprintf(os.Stderr, "Error: invalid key=value: %s\n", kv)
+		key, val, err := parseKVPair(kv)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		key, value := parts[0], parts[1]
-		switch {
-		case value == "true":
-			metadata[key] = true
-		case value == "false":
-			metadata[key] = false
-		case value == "null" || value == "nil" || value == "":
-			metadata[key] = nil
-		case strings.Contains(value, ","):
-			// Comma-separated values → array (e.g. tags=v1,api)
-			items := strings.Split(value, ",")
-			trimmed := make([]string, 0, len(items))
-			for _, item := range items {
-				if s := strings.TrimSpace(item); s != "" {
-					trimmed = append(trimmed, s)
-				}
-			}
-			metadata[key] = trimmed
-		default:
-			metadata[key] = value
-		}
+		metadata[key] = val
 	}
 
 	if len(metadata) == 0 {
@@ -321,6 +301,35 @@ func runSet() {
 			fmt.Fprintf(os.Stderr, "  %s\n", e.Message)
 		}
 		os.Exit(1)
+	}
+}
+
+// parseKVPair parses a "key=value" string into a key and typed value.
+// Booleans, null/nil/empty, comma-separated arrays, and plain strings are supported.
+func parseKVPair(kv string) (string, any, error) {
+	parts := strings.SplitN(kv, "=", 2)
+	if len(parts) != 2 {
+		return "", nil, fmt.Errorf("invalid key=value: %s", kv)
+	}
+	key, value := parts[0], parts[1]
+	switch {
+	case value == "true":
+		return key, true, nil
+	case value == "false":
+		return key, false, nil
+	case value == "null" || value == "nil" || value == "":
+		return key, nil, nil
+	case strings.Contains(value, ","):
+		items := strings.Split(value, ",")
+		trimmed := make([]string, 0, len(items))
+		for _, item := range items {
+			if s := strings.TrimSpace(item); s != "" {
+				trimmed = append(trimmed, s)
+			}
+		}
+		return key, trimmed, nil
+	default:
+		return key, value, nil
 	}
 }
 
