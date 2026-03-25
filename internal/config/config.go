@@ -212,6 +212,11 @@ func ResolveAPIURL() string {
 	return ResolveServerURL() + "/api"
 }
 
+// ResolvePrivate returns true if the project config has private: true.
+func ResolvePrivate() bool {
+	return Resolve("private", "SPECBOX_PRIVATE", "") == "true"
+}
+
 // ResolveAuthToken returns the auth token for the given server URL.
 func ResolveAuthToken(serverURL string) string {
 	cfg, err := ReadGlobalConfig()

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -460,5 +462,95 @@ func TestPushHandler_SendsBody(t *testing.T) {
 	}
 	if gotBody["slug"] != "spec" {
 		t.Errorf("expected slug 'spec', got %v", gotBody["slug"])
+	}
+}
+
+// ========== PRIVATE CONFIG TESTS ==========
+
+func TestPushHandler_PrivateConfigSendsVisibility(t *testing.T) {
+	s, store := setupSync(t)
+	seed(t, store, "spec.md", "# New spec with no frontmatter")
+
+	// Set private=true in a .specbox.yaml in the working directory
+	dir, _ := os.Getwd()
+	configPath := filepath.Join(dir, ".specbox.yaml")
+	os.WriteFile(configPath, []byte("private: true\n"), 0644)
+	t.Cleanup(func() { os.Remove(configPath) })
+
+	var gotBody map[string]any
+	mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(200)
+		w.Write(specJSON(map[string]any{
+			"id": "x", "version": 1,
+			"frontmatter": "---\nspecbox:\n  id: x\n  metadata:\n    visibility: private\n---",
+		}))
+	})
+
+	call(t, s, "push_spec", map[string]any{"path": "spec.md"})
+
+	metadata, ok := gotBody["metadata"].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata in push body")
+	}
+	if metadata["visibility"] != "private" {
+		t.Errorf("expected visibility=private, got %v", metadata["visibility"])
+	}
+}
+
+func TestPushHandler_PrivateConfigSkipsIfVisibilityInFrontmatter(t *testing.T) {
+	s, store := setupSync(t)
+	// Spec already has visibility set in frontmatter
+	seed(t, store, "spec.md", "---\nspecbox:\n  id: abc123\n  metadata:\n    visibility: public\n---\n# Spec")
+
+	dir, _ := os.Getwd()
+	configPath := filepath.Join(dir, ".specbox.yaml")
+	os.WriteFile(configPath, []byte("private: true\n"), 0644)
+	t.Cleanup(func() { os.Remove(configPath) })
+
+	var gotBody map[string]any
+	mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(200)
+		w.Write(specJSON(map[string]any{
+			"id": "abc123", "version": 2,
+			"frontmatter": "---\nspecbox:\n  id: abc123\n  metadata:\n    visibility: public\n---",
+		}))
+	})
+
+	call(t, s, "push_spec", map[string]any{"path": "spec.md"})
+
+	// Should NOT send visibility in metadata — frontmatter already has it
+	if gotBody["metadata"] != nil {
+		metadata := gotBody["metadata"].(map[string]any)
+		if _, ok := metadata["visibility"]; ok {
+			t.Error("should not send visibility when frontmatter already has it")
+		}
+	}
+}
+
+func TestPushHandler_NoPrivateConfigNoVisibility(t *testing.T) {
+	s, store := setupSync(t)
+	seed(t, store, "spec.md", "# Spec")
+
+	// Ensure no private config — use temp HOME with no .specbox.yaml
+	t.Setenv("HOME", t.TempDir())
+	// Remove any .specbox.yaml in cwd (shouldn't exist but be safe)
+
+	var gotBody map[string]any
+	mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(200)
+		w.Write(specJSON(map[string]any{
+			"id": "x", "version": 1,
+			"frontmatter": "---\nspecbox:\n  id: x\n---",
+		}))
+	})
+
+	call(t, s, "push_spec", map[string]any{"path": "spec.md"})
+
+	// Should not have metadata at all (no private config)
+	if gotBody["metadata"] != nil {
+		t.Errorf("expected no metadata, got %v", gotBody["metadata"])
 	}
 }

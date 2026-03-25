@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/specboxhq/specbox/internal/api"
+	"github.com/specboxhq/specbox/internal/domain"
 )
 
 // --- Push ---
@@ -35,7 +36,25 @@ func runPush() {
 	// Derive slug from filename
 	slug := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
-	result, statusCode, err := client.Push(rawContent, slug, nil)
+	// Apply private config as default visibility
+	var metadata map[string]any
+	if resolvePrivate() {
+		hasVisibility := false
+		if fmData, _, fmErr := domain.ParseFrontmatter(rawContent); fmErr == nil && fmData != nil {
+			if specbox, ok := fmData["specbox"].(map[string]any); ok {
+				if meta, ok := specbox["metadata"].(map[string]any); ok {
+					if _, ok := meta["visibility"]; ok {
+						hasVisibility = true
+					}
+				}
+			}
+		}
+		if !hasVisibility {
+			metadata = map[string]any{"visibility": "private"}
+		}
+	}
+
+	result, statusCode, err := client.Push(rawContent, slug, metadata)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

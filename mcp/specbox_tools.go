@@ -694,6 +694,33 @@ func pushSpecHandler(svc domain.DocumentService) server.ToolHandlerFunc {
 			_ = json.Unmarshal([]byte(m), &metadata)
 		}
 
+		// Apply private config as default visibility if not already set
+		if config.ResolvePrivate() {
+			// Check if spec already has visibility in frontmatter
+			hasVisibility := false
+			if fmData, _, fmErr := domain.ParseFrontmatter(doc.Content); fmErr == nil && fmData != nil {
+				if specbox, ok := fmData["specbox"].(map[string]any); ok {
+					if meta, ok := specbox["metadata"].(map[string]any); ok {
+						if _, ok := meta["visibility"]; ok {
+							hasVisibility = true
+						}
+					}
+				}
+			}
+			// Also check if visibility is being set in this push's metadata
+			if metadata != nil {
+				if _, ok := metadata["visibility"]; ok {
+					hasVisibility = true
+				}
+			}
+			if !hasVisibility {
+				if metadata == nil {
+					metadata = map[string]any{}
+				}
+				metadata["visibility"] = "private"
+			}
+		}
+
 		// Derive slug from path
 		slug := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 

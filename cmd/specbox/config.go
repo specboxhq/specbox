@@ -28,6 +28,7 @@ func findProjectConfig(key string) string {
 	return ""
 }
 func readSimpleYAML(path string) map[string]string     { return config.ReadSimpleYAML(path) }
+func resolvePrivate() bool                              { return config.ResolvePrivate() }
 
 // configEntry is an alias for display in configcmd.go.
 type configEntry = config.Entry
